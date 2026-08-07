@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Smart & Cute カウントダウン家計簿</title>
+  <title>Smart & Cute カウントダウン家計簿 (Supabase版)</title>
   <!-- Tailwind CSS & Google Fonts -->
   <script src="https://cdn.tailwindcss.com"></script>
   <link href="https://fonts.googleapis.com/css2?family=Zen+Maru+Gothic:wght@500;700;900&display=swap" rel="stylesheet">
@@ -11,6 +11,10 @@
   <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
   <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  
+  <!-- ★ Supabase JavaScript SDK (CDN) ★ -->
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+
   <style>
     body { font-family: 'Zen Maru Gothic', sans-serif; }
   </style>
@@ -22,11 +26,41 @@
   <script type="text/babel">
     const { useState, useEffect } = React;
 
+    // ==========================================
+    // ★ 1. SUPABASE 設定情報 (ご自身のものに書き換えてください) ★
+    // ==========================================
+    const SUPABASE_URL = "https://brpzhswcdopakfmvibbq.supabase.co/rest/v1/";
+    const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJycHpoc3djZG9wYWtmbXZpYmJxIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODYwOTA0NzIsImV4cCI6MjEwMTY2NjQ3Mn0.ogbegX9OOIKR_IXjqennClRNNieImH4Cag2Vtqq04v0";
+
+    // Supabaseクライアントの初期化 (変数名の衝突を防ぐため supabaseClient と定義)
+    const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
     function toFullWidth(str) {
       if (!str) return '';
       return str.replace(/[A-Za-z0-9!-~]/g, function(s) {
         return String.fromCharCode(s.charCodeAt(0) + 0xFEE0);
       }).replace(/ /g, ' ');
+    }
+
+    function calculateRemainingDays(yearMonthStr) {
+      const today = new Date();
+      const [yearStr, monthStr] = yearMonthStr.split('-');
+      const targetYear = Number(yearStr);
+      const targetMonth = Number(monthStr);
+
+      const currentYear = today.getFullYear();
+      const currentMonth = today.getMonth() + 1;
+      const currentDay = today.getDate();
+
+      const lastDayOfMonth = new Date(targetYear, targetMonth, 0).getDate();
+
+      if (targetYear === currentYear && targetMonth === currentMonth) {
+        return Math.max(1, lastDayOfMonth - currentDay + 1);
+      }
+      if (targetYear < currentYear || (targetYear === currentYear && targetMonth < currentMonth)) {
+        return 1;
+      }
+      return lastDayOfMonth;
     }
 
     function SmartKakeibo() {
@@ -35,29 +69,82 @@
       const defaultTodayDate = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
 
       const [currentYM, setCurrentYM] = useState(defaultYearMonth);
-      const [viewMode, setViewMode] = useState('list'); // 'list' | 'calendar'
+      const [viewMode, setViewMode] = useState('list');
 
-      const [income, setIncome] = useState(() => {
-        const saved = localStorage.getItem('sk_income');
-        return saved !== null ? Number(saved) : 250000;
-      });
+      // 基本設定＆全データステート
+      const [income, setIncome] = useState(250000);
+      const [fixedCosts, setFixedCosts] = useState([
+        { id: '1', title: '家賃', amount: 85000 },
+        { id: '2', title: '生活費', amount: 20000 },
+        { id: '3', title: '貯金', amount: 20000 }
+      ]);
+      const [allMonthlyData, setAllMonthlyData] = useState({});
+      const [isLoading, setIsLoading] = useState(true);
 
-      const [fixedCosts, setFixedCosts] = useState(() => {
-        const saved = localStorage.getItem('sk_fixed_costs');
-        return saved !== null ? JSON.parse(saved) : [
-          { id: '1', title: '家賃', amount: 85000 },
-          { id: '2', title: '生活費', amount: 20000 },
-          { id: '3', title: '貯金', amount: 20000 }
-        ];
-      });
+      // ==========================================
+      // ★ 2. SUPABASE からのデータ読み込み (fetchMemos) ★
+      // ==========================================
+      const fetchMemos = async () => {
+        setIsLoading(true);
+        try {
+          const { data, error } = await supabaseClient
+            .from('memos')
+            .select('*')
+            .order('id', { ascending: false });
 
-      const [allMonthlyData, setAllMonthlyData] = useState(() => {
-        const saved = localStorage.getItem('sk_monthly_data_v2');
-        return saved !== null ? JSON.parse(saved) : {};
-      });
+          if (error) {
+            console.error('Supabaseからの読み込みエラー:', error);
+          } else if (data && data.length > 0) {
+            // content 列に保存された最新のJSONデータを復元
+            const latestMemo = data[0];
+            if (latestMemo.content) {
+              const parsed = typeof latestMemo.content === 'string' 
+                ? JSON.parse(latestMemo.content) 
+                : latestMemo.content;
+
+              if (parsed.income) setIncome(parsed.income);
+              if (parsed.fixedCosts) setFixedCosts(parsed.fixedCosts);
+              if (parsed.allMonthlyData) setAllMonthlyData(parsed.allMonthlyData);
+            }
+          }
+        } catch (err) {
+          console.error('データ取得失敗:', err);
+        } finally {
+          setIsLoading(false);
+        }
+      };
+
+      // 初回起動時にSupabaseからデータを取得
+      useEffect(() => {
+        fetchMemos();
+      }, []);
+
+      // ==========================================
+      // ★ 3. SUPABASE へのデータ保存 (saveToSupabase) ★
+      // ==========================================
+      const saveToSupabase = async (newIncome, newFixedCosts, newAllMonthlyData) => {
+        try {
+          const payload = {
+            income: newIncome,
+            fixedCosts: newFixedCosts,
+            allMonthlyData: newAllMonthlyData
+          };
+
+          // memos テーブルの content 列に保存
+          const { error } = await supabaseClient
+            .from('memos')
+            .insert([{ content: JSON.stringify(payload) }]);
+
+          if (error) {
+            console.error('Supabase保存エラー:', error);
+          }
+        } catch (err) {
+          console.error('データ保存失敗:', err);
+        }
+      };
 
       const monthData = allMonthlyData[currentYM] || {
-        remainingDays: 30,
+        remainingDays: calculateRemainingDays(currentYM),
         events: [],
         plannedPurchases: [],
         dailyRecords: []
@@ -67,6 +154,12 @@
       const events = monthData.events;
       const plannedPurchases = monthData.plannedPurchases;
       const dailyRecords = monthData.dailyRecords;
+
+      // 月を変更した際の処理
+      useEffect(() => {
+        const autoDays = calculateRemainingDays(currentYM);
+        updateMonthData(d => ({ ...d, remainingDays: autoDays }));
+      }, [currentYM]);
 
       const [isBudgetTabOpen, setIsBudgetTabOpen] = useState(false);
       const [newCostTitle, setNewCostTitle] = useState('');
@@ -79,56 +172,64 @@
       const [newPurchaseTitle, setNewPurchaseTitle] = useState('');
       const [newPurchaseBudget, setNewPurchaseBudget] = useState('');
 
-      // 日常記帳用ステート（日付指定入力対応）
       const [dailyDate, setDailyDate] = useState(defaultTodayDate);
       const [dailyMemo, setDailyMemo] = useState('');
       const [dailyAmount, setDailyAmount] = useState('');
 
-      // カレンダーの日付詳細モーダル用
       const [selectedCalendarDate, setSelectedCalendarDate] = useState(null);
 
-      useEffect(() => {
-        localStorage.setItem('sk_income', income.toString());
-        localStorage.setItem('sk_fixed_costs', JSON.stringify(fixedCosts));
-        localStorage.setItem('sk_monthly_data_v2', JSON.stringify(allMonthlyData));
-      }, [income, fixedCosts, allMonthlyData]);
-
+      // 月データの更新ヘルパー ＆ 自動クラウド保存
       const updateMonthData = (updater) => {
         setAllMonthlyData(prev => {
           const currentData = prev[currentYM] || {
-            remainingDays: 30,
+            remainingDays: calculateRemainingDays(currentYM),
             events: [],
             plannedPurchases: [],
             dailyRecords: []
           };
-          return {
+          const updatedAll = {
             ...prev,
             [currentYM]: updater(currentData)
           };
+          // Supabaseに保存
+          saveToSupabase(income, fixedCosts, updatedAll);
+          return updatedAll;
         });
       };
 
-      // 固定費＆自由予算
-      const totalFixedCosts = fixedCosts.reduce((sum, item) => sum + Number(item.amount || 0), 0);
-      const calculatedBudget = income - totalFixedCosts;
-
+      // 固定費操作 ＆ クラウド保存
       const handleAddFixedCost = (e) => {
         e.preventDefault();
         if (!newCostTitle || !newCostAmount) return;
-        setFixedCosts([...fixedCosts, { id: Date.now().toString(), title: toFullWidth(newCostTitle), amount: Number(newCostAmount) }]);
+        const updatedCosts = [...fixedCosts, { id: Date.now().toString(), title: toFullWidth(newCostTitle), amount: Number(newCostAmount) }];
+        setFixedCosts(updatedCosts);
+        saveToSupabase(income, updatedCosts, allMonthlyData);
         setNewCostTitle('');
         setNewCostAmount('');
       };
 
       const handleDeleteFixedCost = (id) => {
-        setFixedCosts(fixedCosts.filter(item => item.id !== id));
+        const updatedCosts = fixedCosts.filter(item => item.id !== id);
+        setFixedCosts(updatedCosts);
+        saveToSupabase(income, updatedCosts, allMonthlyData);
       };
 
       const handleUpdateFixedCost = (id, field, value) => {
-        setFixedCosts(fixedCosts.map(item => item.id === id ? { ...item, [field]: field === 'amount' ? Number(value) : toFullWidth(value) } : item));
+        const updatedCosts = fixedCosts.map(item => item.id === id ? { ...item, [field]: field === 'amount' ? Number(value) : toFullWidth(value) } : item);
+        setFixedCosts(updatedCosts);
+        saveToSupabase(income, updatedCosts, allMonthlyData);
       };
 
-      // 収支計算
+      const handleIncomeChange = (newVal) => {
+        const val = Number(newVal);
+        setIncome(val);
+        saveToSupabase(val, fixedCosts, allMonthlyData);
+      };
+
+      // 計算ロジック
+      const totalFixedCosts = fixedCosts.reduce((sum, item) => sum + Number(item.amount || 0), 0);
+      const calculatedBudget = income - totalFixedCosts;
+
       const totalDailySpent = dailyRecords.reduce((sum, item) => sum + Number(item.amount || 0), 0);
 
       let totalEventActual = 0;
@@ -240,13 +341,12 @@
         }));
       };
 
-      // 【日常記帳】日付自由指定追加
+      // 日常記帳操作
       const handleAddDaily = (e) => {
         e.preventDefault();
         if (!dailyAmount) return;
         const formattedMemo = dailyMemo ? toFullWidth(dailyMemo) : '日常の買い物';
         
-        // 入力日付フォーマット（YYYY/MM/DD）
         const dateObj = new Date(dailyDate);
         const formattedDateStr = `${dateObj.getFullYear()}/${String(dateObj.getMonth() + 1).padStart(2, '0')}/${String(dateObj.getDate()).padStart(2, '0')}`;
 
@@ -257,7 +357,6 @@
           date: formattedDateStr
         };
         
-        // 日付順に並び替え保持
         updateMonthData(d => {
           const updated = [newRecord, ...d.dailyRecords].sort((a, b) => b.date.localeCompare(a.date));
           return { ...d, dailyRecords: updated };
@@ -277,7 +376,6 @@
         }));
       };
 
-      // 日常ログの日付グループ化
       const groupedDailyRecords = dailyRecords.reduce((groups, record) => {
         const date = record.date || '日付不明';
         if (!groups[date]) groups[date] = [];
@@ -285,18 +383,16 @@
         return groups;
       }, {});
 
-      // --- カレンダー描画用ロジック ---
+      // カレンダー用
       const [yearStr, monthStr] = currentYM.split('-');
       const yearNum = Number(yearStr);
       const monthNum = Number(monthStr);
 
       const daysInMonth = new Date(yearNum, monthNum, 0).getDate();
-      const startDayOfWeek = new Date(yearNum, monthNum - 1, 1).getDay(); // 0: 日曜
+      const startDayOfWeek = new Date(yearNum, monthNum - 1, 1).getDay();
 
-      // カレンダーの日別支出データマップ作成
       const calendarDailyTotals = {};
       dailyRecords.forEach(r => {
-        // "YYYY/MM/DD" -> "DD"
         const parts = r.date.split('/');
         if (parts.length === 3) {
           const dNum = Number(parts[2]);
@@ -313,10 +409,13 @@
               <h1 className="text-2xl font-black text-rose-500 flex items-center gap-2">
                 <span>🎀</span> カウントダウン＆イベント家計簿
               </h1>
-              <p className="text-xs text-slate-400 mt-1">日付指定入力＆カレンダータブ搭載版！</p>
+              <p className="text-xs text-slate-400 mt-1">Supabase クラウドデータベース連携版！</p>
             </div>
 
             <div className="flex flex-wrap items-center gap-3 bg-rose-50 p-2.5 rounded-2xl border border-rose-100 text-xs">
+              {isLoading && (
+                <span className="text-rose-500 font-bold animate-pulse text-[10px]">☁️ 読み込み中...</span>
+              )}
               <div className="flex items-center gap-1 font-bold bg-white px-2 py-1 rounded-xl border border-rose-200">
                 <span>📅</span>
                 <input
@@ -335,14 +434,15 @@
                 <span>{isBudgetTabOpen ? '▲' : '▼'}</span>
               </button>
 
-              <div className="flex items-center gap-1">
-                <span className="text-slate-400 font-bold">残り日数:</span>
+              <div className="flex items-center gap-1 bg-white px-2.5 py-1 rounded-xl border border-rose-200">
+                <span className="text-slate-400 font-bold">残り:</span>
                 <input 
                   type="number" 
                   value={remainingDays} 
                   onChange={(e) => updateMonthData(d => ({ ...d, remainingDays: Number(e.target.value) }))}
-                  className="w-12 bg-white border border-rose-200 rounded-lg px-1.5 py-0.5 font-bold text-slate-700 text-center"
-                /> 日
+                  className="w-10 font-bold text-rose-500 text-center focus:outline-none"
+                />
+                <span className="text-slate-400 font-bold">日（自動）</span>
               </div>
             </div>
           </header>
@@ -368,7 +468,7 @@
                   <input
                     type="number"
                     value={income}
-                    onChange={(e) => setIncome(Number(e.target.value))}
+                    onChange={(e) => handleIncomeChange(e.target.value)}
                     className="w-full p-2.5 bg-white border border-rose-200 rounded-xl font-bold text-slate-800 text-lg"
                   />
                 </div>
@@ -488,14 +588,14 @@
               </div>
             </div>
 
-            {/* 日常記帳フォーム（日付自由指定機能追加） */}
+            {/* 日常記帳フォーム */}
             <div className="bg-white p-6 rounded-3xl shadow-sm border border-rose-100">
               <h2 className="text-xs font-bold text-slate-400 mb-3 flex items-center gap-1">
                 <span>📝</span> 何もない日の支出（日常記帳）
               </h2>
               <form onSubmit={handleAddDaily} className="space-y-2.5">
                 <div>
-                  <label className="text-[10px] font-bold text-slate-400 mb-0.5 block">日付（その日以降・過去日も選択可能）</label>
+                  <label className="text-[10px] font-bold text-slate-400 mb-0.5 block">日付</label>
                   <input
                     type="date"
                     value={dailyDate}
@@ -684,7 +784,7 @@
               </div>
             </div>
 
-            {/* 買い物予定 ＆ 日常ログ（縦幅2.5倍拡張 ＆ カレンダータブ追加） */}
+            {/* 買い物予定 ＆ 日常ログ */}
             <div className="space-y-6">
               
               {/* 買い物予定 */}
@@ -758,14 +858,13 @@
                 </div>
               </div>
 
-              {/* 【拡張＆タブ化】日常ログ ＆ カレンダー機能 */}
+              {/* 日常ログ ＆ カレンダー機能 */}
               <div className="bg-white p-6 rounded-3xl shadow-sm border border-rose-100">
                 <div className="flex justify-between items-center border-b border-rose-50 pb-3 mb-4">
                   <h2 className="font-bold text-slate-700 text-xs flex items-center gap-1">
                     <span>☕️</span> 日常支出ログ
                   </h2>
 
-                  {/* 表示切替タブ */}
                   <div className="flex bg-rose-50 p-1 rounded-xl border border-rose-100 text-[11px] font-bold">
                     <button
                       onClick={() => setViewMode('list')}
@@ -786,7 +885,6 @@
                   </div>
                 </div>
 
-                {/* ① リスト表示（縦幅2.5倍＝max-h-[38rem]へ拡張） */}
                 {viewMode === 'list' ? (
                   <div className="space-y-4 max-h-[38rem] overflow-y-auto pr-1">
                     {Object.keys(groupedDailyRecords).length === 0 ? (
@@ -836,7 +934,6 @@
                     )}
                   </div>
                 ) : (
-                  /* ② カレンダー表示 */
                   <div className="space-y-3">
                     <div className="grid grid-cols-7 gap-1 text-center text-[10px] font-bold text-slate-400 py-1">
                       <span className="text-rose-400">日</span>
@@ -845,12 +942,10 @@
                     </div>
 
                     <div className="grid grid-cols-7 gap-1.5">
-                      {/* 開始日の前の空白 */}
                       {Array.from({ length: startDayOfWeek }).map((_, idx) => (
                         <div key={`empty-${idx}`} className="h-14 bg-slate-50/50 rounded-xl"></div>
                       ))}
 
-                      {/* 日付マス目 */}
                       {Array.from({ length: daysInMonth }).map((_, idx) => {
                         const dayNum = idx + 1;
                         const totalSpent = calendarDailyTotals[dayNum] || 0;
@@ -877,9 +972,8 @@
                       })}
                     </div>
 
-                    {/* カレンダータップ時の内訳ポップアップ表示 */}
                     {selectedCalendarDate && (
-                      <div className="mt-4 p-4 bg-rose-50/80 rounded-2xl border border-rose-200 space-y-2 animate-fadeIn">
+                      <div className="mt-4 p-4 bg-rose-50/80 rounded-2xl border border-rose-200 space-y-2">
                         <div className="flex justify-between items-center">
                           <span className="text-xs font-bold text-slate-700">📅 {selectedCalendarDate} の支出内訳</span>
                           <button onClick={() => setSelectedCalendarDate(null)} className="text-xs text-slate-400 hover:text-slate-600 font-bold">✕ 閉じる</button>
