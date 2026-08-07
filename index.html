@@ -30,9 +30,9 @@
     // ★ 1. SUPABASE 設定情報 (ご自身のものに書き換えてください) ★
     // ==========================================
     const SUPABASE_URL = "https://brpzhswcdopakfmvibbq.supabase.co";
-    const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJycHpoc3djZG9wYWtmbXZpYmJxIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODYwOTA0NzIsImV4cCI6MjEwMTY2NjQ3Mn0.ogbegX9OOIKR_IXjqennClRNNieImH4Cag2Vtqq04v0";
+    const SUPABASE_ANON_KEY = "your-anon-key"; // ←ここにご自身のanon keyを入れてください
 
-    // Supabaseクライアントの初期化 (変数名の衝突を防ぐため supabaseClient と定義)
+    // Supabaseクライアントの初期化
     const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
     function toFullWidth(str) {
@@ -90,21 +90,21 @@
           const { data, error } = await supabaseClient
             .from('memos')
             .select('*')
-            .order('id', { ascending: false });
+            .order('id', { ascending: false })
+            .limit(1);
 
           if (error) {
             console.error('Supabaseからの読み込みエラー:', error);
           } else if (data && data.length > 0) {
-            // content 列に保存された最新のJSONデータを復元
             const latestMemo = data[0];
             if (latestMemo.content) {
               const parsed = typeof latestMemo.content === 'string' 
                 ? JSON.parse(latestMemo.content) 
                 : latestMemo.content;
 
-              if (parsed.income) setIncome(parsed.income);
-              if (parsed.fixedCosts) setFixedCosts(parsed.fixedCosts);
-              if (parsed.allMonthlyData) setAllMonthlyData(parsed.allMonthlyData);
+              if (parsed.income !== undefined) setIncome(parsed.income);
+              if (parsed.fixedCosts !== undefined) setFixedCosts(parsed.fixedCosts);
+              if (parsed.allMonthlyData !== undefined) setAllMonthlyData(parsed.allMonthlyData);
             }
           }
         } catch (err) {
@@ -130,7 +130,6 @@
             allMonthlyData: newAllMonthlyData
           };
 
-          // memos テーブルの content 列に保存
           const { error } = await supabaseClient
             .from('memos')
             .insert([{ content: JSON.stringify(payload) }]);
@@ -191,7 +190,6 @@
             ...prev,
             [currentYM]: updater(currentData)
           };
-          // Supabaseに保存
           saveToSupabase(income, fixedCosts, updatedAll);
           return updatedAll;
         });
@@ -414,7 +412,7 @@
 
             <div className="flex flex-wrap items-center gap-3 bg-rose-50 p-2.5 rounded-2xl border border-rose-100 text-xs">
               {isLoading && (
-                <span className="text-rose-500 font-bold animate-pulse text-[10px]">☁️ 読み込み中...</span>
+                <span className="text-rose-500 font-bold animate-pulse text-[10px]">☁️ データを取得中...</span>
               )}
               <div className="flex items-center gap-1 font-bold bg-white px-2 py-1 rounded-xl border border-rose-200">
                 <span>📅</span>
