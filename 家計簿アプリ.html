@@ -1,0 +1,917 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Smart & Cute カウントダウン家計簿</title>
+  <!-- Tailwind CSS & Google Fonts -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Zen+Maru+Gothic:wght@500;700;900&display=swap" rel="stylesheet">
+  <!-- React & Babel -->
+  <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <style>
+    body { font-family: 'Zen Maru Gothic', sans-serif; }
+  </style>
+</head>
+
+<body class="bg-rose-50/50 min-h-screen text-slate-700">
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect } = React;
+
+    function toFullWidth(str) {
+      if (!str) return '';
+      return str.replace(/[A-Za-z0-9!-~]/g, function(s) {
+        return String.fromCharCode(s.charCodeAt(0) + 0xFEE0);
+      }).replace(/ /g, ' ');
+    }
+
+    function SmartKakeibo() {
+      const today = new Date();
+      const defaultYearMonth = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}`;
+      const defaultTodayDate = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+
+      const [currentYM, setCurrentYM] = useState(defaultYearMonth);
+      const [viewMode, setViewMode] = useState('list'); // 'list' | 'calendar'
+
+      const [income, setIncome] = useState(() => {
+        const saved = localStorage.getItem('sk_income');
+        return saved !== null ? Number(saved) : 250000;
+      });
+
+      const [fixedCosts, setFixedCosts] = useState(() => {
+        const saved = localStorage.getItem('sk_fixed_costs');
+        return saved !== null ? JSON.parse(saved) : [
+          { id: '1', title: '家賃', amount: 85000 },
+          { id: '2', title: '生活費', amount: 20000 },
+          { id: '3', title: '貯金', amount: 20000 }
+        ];
+      });
+
+      const [allMonthlyData, setAllMonthlyData] = useState(() => {
+        const saved = localStorage.getItem('sk_monthly_data_v2');
+        return saved !== null ? JSON.parse(saved) : {};
+      });
+
+      const monthData = allMonthlyData[currentYM] || {
+        remainingDays: 30,
+        events: [],
+        plannedPurchases: [],
+        dailyRecords: []
+      };
+
+      const remainingDays = monthData.remainingDays;
+      const events = monthData.events;
+      const plannedPurchases = monthData.plannedPurchases;
+      const dailyRecords = monthData.dailyRecords;
+
+      const [isBudgetTabOpen, setIsBudgetTabOpen] = useState(false);
+      const [newCostTitle, setNewCostTitle] = useState('');
+      const [newCostAmount, setNewCostAmount] = useState('');
+
+      const [newEventTitle, setNewEventTitle] = useState('');
+      const [newEventDate, setNewEventDate] = useState('');
+      const [subItemsInput, setSubItemsInput] = useState([{ name: '', budget: '' }]);
+
+      const [newPurchaseTitle, setNewPurchaseTitle] = useState('');
+      const [newPurchaseBudget, setNewPurchaseBudget] = useState('');
+
+      // 日常記帳用ステート（日付指定入力対応）
+      const [dailyDate, setDailyDate] = useState(defaultTodayDate);
+      const [dailyMemo, setDailyMemo] = useState('');
+      const [dailyAmount, setDailyAmount] = useState('');
+
+      // カレンダーの日付詳細モーダル用
+      const [selectedCalendarDate, setSelectedCalendarDate] = useState(null);
+
+      useEffect(() => {
+        localStorage.setItem('sk_income', income.toString());
+        localStorage.setItem('sk_fixed_costs', JSON.stringify(fixedCosts));
+        localStorage.setItem('sk_monthly_data_v2', JSON.stringify(allMonthlyData));
+      }, [income, fixedCosts, allMonthlyData]);
+
+      const updateMonthData = (updater) => {
+        setAllMonthlyData(prev => {
+          const currentData = prev[currentYM] || {
+            remainingDays: 30,
+            events: [],
+            plannedPurchases: [],
+            dailyRecords: []
+          };
+          return {
+            ...prev,
+            [currentYM]: updater(currentData)
+          };
+        });
+      };
+
+      // 固定費＆自由予算
+      const totalFixedCosts = fixedCosts.reduce((sum, item) => sum + Number(item.amount || 0), 0);
+      const calculatedBudget = income - totalFixedCosts;
+
+      const handleAddFixedCost = (e) => {
+        e.preventDefault();
+        if (!newCostTitle || !newCostAmount) return;
+        setFixedCosts([...fixedCosts, { id: Date.now().toString(), title: toFullWidth(newCostTitle), amount: Number(newCostAmount) }]);
+        setNewCostTitle('');
+        setNewCostAmount('');
+      };
+
+      const handleDeleteFixedCost = (id) => {
+        setFixedCosts(fixedCosts.filter(item => item.id !== id));
+      };
+
+      const handleUpdateFixedCost = (id, field, value) => {
+        setFixedCosts(fixedCosts.map(item => item.id === id ? { ...item, [field]: field === 'amount' ? Number(value) : toFullWidth(value) } : item));
+      };
+
+      // 収支計算
+      const totalDailySpent = dailyRecords.reduce((sum, item) => sum + Number(item.amount || 0), 0);
+
+      let totalEventActual = 0;
+      events.forEach(e => e.subItems.forEach(s => totalEventActual += Number(s.actual || 0)));
+
+      let totalPurchaseActual = 0;
+      plannedPurchases.forEach(p => {
+        if (p.isDone) {
+          totalPurchaseActual += Number(p.actual > 0 ? p.actual : p.budget || 0);
+        }
+      });
+
+      const totalMonthSpentAll = totalFixedCosts + totalDailySpent + totalEventActual + totalPurchaseActual;
+      const overallBalance = income - totalMonthSpentAll;
+
+      const totalActualSpent = totalDailySpent + totalEventActual + totalPurchaseActual;
+      const currentRemainingTotal = calculatedBudget - totalActualSpent;
+
+      const unspentEventBudget = events.reduce((sum, ev) => {
+        return sum + ev.subItems.reduce((sSum, s) => sSum + (s.actual > 0 ? 0 : Number(s.budget || 0)), 0);
+      }, 0);
+
+      const unspentPurchaseBudget = plannedPurchases.reduce((sum, p) => {
+        return sum + (p.isDone ? 0 : Number(p.budget || 0));
+      }, 0);
+
+      const reservedBudget = unspentEventBudget + unspentPurchaseBudget;
+      const pureDailyBudgetPool = currentRemainingTotal - reservedBudget;
+      const todayRecommendedBudget = remainingDays > 0 ? Math.floor(pureDailyBudgetPool / remainingDays) : pureDailyBudgetPool;
+
+      // イベント操作
+      const handleAddEvent = (e) => {
+        e.preventDefault();
+        if (!newEventTitle) return;
+        const filteredSubs = subItemsInput.filter(s => s.name && s.budget).map(s => ({ name: toFullWidth(s.name), budget: Number(s.budget), actual: 0 }));
+        const newEv = { id: Date.now().toString(), title: toFullWidth(newEventTitle), date: newEventDate, subItems: filteredSubs };
+        updateMonthData(d => ({ ...d, events: [...d.events, newEv] }));
+        setNewEventTitle(''); setNewEventDate(''); setSubItemsInput([{ name: '', budget: '' }]);
+      };
+
+      const handleDeleteEvent = (id) => {
+        updateMonthData(d => ({ ...d, events: d.events.filter(e => e.id !== id) }));
+      };
+
+      const handleUpdateEventTitle = (id, newTitle) => {
+        updateMonthData(d => ({
+          ...d,
+          events: d.events.map(e => e.id === id ? { ...e, title: toFullWidth(newTitle) } : e)
+        }));
+      };
+
+      const handleUpdateSubItem = (eventId, subIdx, field, value) => {
+        updateMonthData(d => ({
+          ...d,
+          events: d.events.map(ev => {
+            if (ev.id !== eventId) return ev;
+            const newSubs = [...ev.subItems];
+            newSubs[subIdx] = { ...newSubs[subIdx], [field]: field === 'name' ? toFullWidth(value) : Number(value) };
+            return { ...ev, subItems: newSubs };
+          })
+        }));
+      };
+
+      const handleAddSubItemToEvent = (eventId) => {
+        updateMonthData(d => ({
+          ...d,
+          events: d.events.map(ev => {
+            if (ev.id !== eventId) return ev;
+            return { ...ev, subItems: [...ev.subItems, { name: '新規項目', budget: 1000, actual: 0 }] };
+          })
+        }));
+      };
+
+      const handleDeleteSubItemFromEvent = (eventId, subIdx) => {
+        updateMonthData(d => ({
+          ...d,
+          events: d.events.map(ev => {
+            if (ev.id !== eventId) return ev;
+            const newSubs = ev.subItems.filter((_, idx) => idx !== subIdx);
+            return { ...ev, subItems: newSubs };
+          })
+        }));
+      };
+
+      // 買い物予定操作
+      const handleAddPurchase = (e) => {
+        e.preventDefault();
+        if (!newPurchaseTitle || !newPurchaseBudget) return;
+        const newP = { id: Date.now().toString(), title: toFullWidth(newPurchaseTitle), budget: Number(newPurchaseBudget), actual: 0, isDone: false };
+        updateMonthData(d => ({ ...d, plannedPurchases: [...d.plannedPurchases, newP] }));
+        setNewPurchaseTitle(''); setNewPurchaseBudget('');
+      };
+
+      const handleDeletePurchase = (id) => {
+        updateMonthData(d => ({ ...d, plannedPurchases: d.plannedPurchases.filter(p => p.id !== id) }));
+      };
+
+      const handleUpdatePurchase = (id, field, value) => {
+        updateMonthData(d => ({
+          ...d,
+          plannedPurchases: d.plannedPurchases.map(p => {
+            if (p.id !== id) return p;
+            if (field === 'isDone') {
+              const defaultActual = value ? (p.actual > 0 ? p.actual : p.budget) : 0;
+              return { ...p, isDone: value, actual: defaultActual };
+            }
+            return { ...p, [field]: field === 'title' ? toFullWidth(value) : Number(value) };
+          })
+        }));
+      };
+
+      // 【日常記帳】日付自由指定追加
+      const handleAddDaily = (e) => {
+        e.preventDefault();
+        if (!dailyAmount) return;
+        const formattedMemo = dailyMemo ? toFullWidth(dailyMemo) : '日常の買い物';
+        
+        // 入力日付フォーマット（YYYY/MM/DD）
+        const dateObj = new Date(dailyDate);
+        const formattedDateStr = `${dateObj.getFullYear()}/${String(dateObj.getMonth() + 1).padStart(2, '0')}/${String(dateObj.getDate()).padStart(2, '0')}`;
+
+        const newRecord = { 
+          id: Date.now().toString(), 
+          amount: Number(dailyAmount), 
+          memo: formattedMemo, 
+          date: formattedDateStr
+        };
+        
+        // 日付順に並び替え保持
+        updateMonthData(d => {
+          const updated = [newRecord, ...d.dailyRecords].sort((a, b) => b.date.localeCompare(a.date));
+          return { ...d, dailyRecords: updated };
+        });
+
+        setDailyMemo(''); setDailyAmount('');
+      };
+
+      const handleDeleteDaily = (id) => {
+        updateMonthData(d => ({ ...d, dailyRecords: d.dailyRecords.filter(r => r.id !== id) }));
+      };
+
+      const handleUpdateDaily = (id, field, value) => {
+        updateMonthData(d => ({
+          ...d,
+          dailyRecords: d.dailyRecords.map(r => r.id === id ? { ...r, [field]: field === 'amount' ? Number(value) : toFullWidth(value) } : r)
+        }));
+      };
+
+      // 日常ログの日付グループ化
+      const groupedDailyRecords = dailyRecords.reduce((groups, record) => {
+        const date = record.date || '日付不明';
+        if (!groups[date]) groups[date] = [];
+        groups[date].push(record);
+        return groups;
+      }, {});
+
+      // --- カレンダー描画用ロジック ---
+      const [yearStr, monthStr] = currentYM.split('-');
+      const yearNum = Number(yearStr);
+      const monthNum = Number(monthStr);
+
+      const daysInMonth = new Date(yearNum, monthNum, 0).getDate();
+      const startDayOfWeek = new Date(yearNum, monthNum - 1, 1).getDay(); // 0: 日曜
+
+      // カレンダーの日別支出データマップ作成
+      const calendarDailyTotals = {};
+      dailyRecords.forEach(r => {
+        // "YYYY/MM/DD" -> "DD"
+        const parts = r.date.split('/');
+        if (parts.length === 3) {
+          const dNum = Number(parts[2]);
+          calendarDailyTotals[dNum] = (calendarDailyTotals[dNum] || 0) + Number(r.amount || 0);
+        }
+      });
+
+      return (
+        <div className="max-w-6xl mx-auto p-4 sm:p-6 space-y-6">
+          
+          {/* ヘッダー */}
+          <header className="flex flex-col sm:flex-row justify-between items-center bg-white p-6 rounded-3xl shadow-sm border border-rose-100 gap-4">
+            <div>
+              <h1 className="text-2xl font-black text-rose-500 flex items-center gap-2">
+                <span>🎀</span> カウントダウン＆イベント家計簿
+              </h1>
+              <p className="text-xs text-slate-400 mt-1">日付指定入力＆カレンダータブ搭載版！</p>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-3 bg-rose-50 p-2.5 rounded-2xl border border-rose-100 text-xs">
+              <div className="flex items-center gap-1 font-bold bg-white px-2 py-1 rounded-xl border border-rose-200">
+                <span>📅</span>
+                <input
+                  type="month"
+                  value={currentYM}
+                  onChange={(e) => setCurrentYM(e.target.value)}
+                  className="font-bold text-slate-700 bg-transparent focus:outline-none cursor-pointer"
+                />
+              </div>
+
+              <button 
+                onClick={() => setIsBudgetTabOpen(!isBudgetTabOpen)}
+                className="bg-rose-400 hover:bg-rose-500 text-white font-bold px-3 py-1.5 rounded-xl transition flex items-center gap-1 shadow-sm"
+              >
+                <span>⚙️ 月予算の計算設定</span>
+                <span>{isBudgetTabOpen ? '▲' : '▼'}</span>
+              </button>
+
+              <div className="flex items-center gap-1">
+                <span className="text-slate-400 font-bold">残り日数:</span>
+                <input 
+                  type="number" 
+                  value={remainingDays} 
+                  onChange={(e) => updateMonthData(d => ({ ...d, remainingDays: Number(e.target.value) }))}
+                  className="w-12 bg-white border border-rose-200 rounded-lg px-1.5 py-0.5 font-bold text-slate-700 text-center"
+                /> 日
+              </div>
+            </div>
+          </header>
+
+          {/* 月予算設定パネル */}
+          {isBudgetTabOpen && (
+            <div className="bg-white p-6 rounded-3xl shadow-md border-2 border-rose-200 space-y-4">
+              <div className="flex justify-between items-center border-b border-rose-100 pb-3">
+                <h2 className="font-bold text-slate-700 text-sm flex items-center gap-2">
+                  <span>💡</span> 月収と固定費（全月共通テンプレート）
+                </h2>
+                <div className="text-right">
+                  <span className="text-xs text-slate-400">毎月使える自由予算: </span>
+                  <span className={`text-xl font-black ${calculatedBudget < 0 ? 'text-red-500' : 'text-rose-500'}`}>
+                    ¥{calculatedBudget.toLocaleString()}
+                  </span>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                <div className="bg-rose-50/60 p-4 rounded-2xl border border-rose-100 space-y-2">
+                  <label className="text-xs font-bold text-slate-600 block">① 手取り月収（円）</label>
+                  <input
+                    type="number"
+                    value={income}
+                    onChange={(e) => setIncome(Number(e.target.value))}
+                    className="w-full p-2.5 bg-white border border-rose-200 rounded-xl font-bold text-slate-800 text-lg"
+                  />
+                </div>
+
+                <div className="md:col-span-2 space-y-3">
+                  <label className="text-xs font-bold text-slate-600 block">② 毎月の固定支出・貯金リスト</label>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-48 overflow-y-auto pr-1">
+                    {fixedCosts.map((cost) => (
+                      <div key={cost.id} className="flex items-center gap-2 p-2 bg-slate-50 rounded-xl border border-slate-200">
+                        <input
+                          type="text"
+                          value={cost.title}
+                          onChange={(e) => handleUpdateFixedCost(cost.id, 'title', e.target.value)}
+                          onBlur={(e) => handleUpdateFixedCost(cost.id, 'title', e.target.value)}
+                          className="w-1/2 p-1 bg-white border border-slate-200 rounded text-xs font-bold"
+                        />
+                        <input
+                          type="number"
+                          value={cost.amount}
+                          onChange={(e) => handleUpdateFixedCost(cost.id, 'amount', e.target.value)}
+                          className="w-1/2 p-1 bg-white border border-slate-200 rounded text-xs font-bold text-right"
+                        />
+                        <span className="text-xs text-slate-400">円</span>
+                        <button onClick={() => handleDeleteFixedCost(cost.id)} className="text-slate-300 hover:text-red-500 p-1 text-xs">✕</button>
+                      </div>
+                    ))}
+                  </div>
+
+                  <form onSubmit={handleAddFixedCost} className="flex gap-2 pt-1">
+                    <input
+                      type="text"
+                      placeholder="項目名"
+                      value={newCostTitle}
+                      onChange={(e) => setNewCostTitle(e.target.value)}
+                      onBlur={(e) => setNewCostTitle(toFullWidth(e.target.value))}
+                      className="w-1/2 p-2 text-xs bg-slate-50 border border-slate-200 rounded-xl"
+                    />
+                    <input
+                      type="number"
+                      placeholder="金額"
+                      value={newCostAmount}
+                      onChange={(e) => setNewCostAmount(e.target.value)}
+                      className="w-1/3 p-2 text-xs bg-slate-50 border border-slate-200 rounded-xl"
+                    />
+                    <button type="submit" className="w-1/6 bg-slate-800 hover:bg-slate-700 text-white text-xs font-bold rounded-xl">追加</button>
+                  </form>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* 月間収支サマリー */}
+          <div className="bg-white p-5 rounded-3xl shadow-sm border border-rose-100 flex flex-col md:flex-row justify-between items-center gap-4">
+            <div className="flex items-center gap-3">
+              <div className="w-12 h-12 rounded-2xl bg-rose-100 text-rose-500 flex items-center justify-center text-2xl font-black">
+                📊
+              </div>
+              <div>
+                <h2 className="text-xs font-bold text-slate-400 uppercase tracking-wider">{currentYM} の月間全体収支サマリー</h2>
+                <div className="text-sm font-bold text-slate-700 mt-0.5">
+                  手取り月収: <span className="font-black">¥{income.toLocaleString()}</span> － 累計総支出: <span className="font-black text-rose-500">¥{totalMonthSpentAll.toLocaleString()}</span>
+                </div>
+              </div>
+            </div>
+
+            <div className={`px-5 py-2.5 rounded-2xl text-right border ${
+              overallBalance >= 0 ? 'bg-emerald-50 border-emerald-200 text-emerald-700' : 'bg-red-50 border-red-200 text-red-600'
+            }`}>
+              <div className="text-[10px] font-bold opacity-80">今月のトータル収支（着地予測）</div>
+              <div className="text-2xl font-black">
+                {overallBalance >= 0 ? `＋¥${overallBalance.toLocaleString()} (黒字)` : `－¥${Math.abs(overallBalance).toLocaleString()} (赤字)`}
+              </div>
+            </div>
+          </div>
+
+          {/* ダッシュボード */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            
+            {/* 今日つかっていい日額 */}
+            <div className={`p-6 rounded-3xl shadow-md flex flex-col justify-between text-white transition-colors duration-300 ${
+              todayRecommendedBudget < 0 ? 'bg-rose-600' : 'bg-emerald-400'
+            }`}>
+              <div>
+                <span className={`text-xs font-bold px-3 py-1 rounded-full inline-block mb-2 ${
+                  todayRecommendedBudget < 0 ? 'bg-rose-700/60' : 'bg-emerald-500/50'
+                }`}>
+                  {todayRecommendedBudget < 0 ? '🚨 予算オーバー！' : '✨ 何もない日の目安'}
+                </span>
+                <h2 className="text-xs opacity-90 font-bold">今日つかっていいお金（日額）</h2>
+                <div className="text-4xl font-black mt-2">
+                  ¥{todayRecommendedBudget.toLocaleString()} <span className="text-sm font-normal">/ 日</span>
+                </div>
+              </div>
+              <p className={`text-[11px] opacity-90 mt-4 p-2 rounded-xl ${
+                todayRecommendedBudget < 0 ? 'bg-rose-700/50' : 'bg-emerald-500/30'
+              }`}>
+                {todayRecommendedBudget < 0 ? '※赤字です！予定を見直すか節約が必要です' : '※節約すると明日以降の目安額が増額！'}
+              </p>
+            </div>
+
+            {/* 今月の残り総予算 */}
+            <div className="bg-white p-6 rounded-3xl shadow-sm border border-rose-100 flex flex-col justify-between">
+              <div>
+                <span className={`text-xs font-bold px-3 py-1 rounded-full inline-block mb-2 ${
+                  currentRemainingTotal < 0 ? 'bg-red-100 text-red-600' : 'bg-rose-100 text-rose-600'
+                }`}>
+                  {currentRemainingTotal < 0 ? '⚠️ 残り自由予算 赤字' : '💰 自由予算バランス'}
+                </span>
+                <h2 className="text-xs text-slate-400 font-bold">残っている自由予算</h2>
+                <div className={`text-3xl font-black mt-2 ${currentRemainingTotal < 0 ? 'text-red-500' : 'text-slate-800'}`}>
+                  ¥{currentRemainingTotal.toLocaleString()}
+                </div>
+              </div>
+              <div className="text-xs text-slate-400 space-y-1 mt-3">
+                <div className="flex justify-between"><span>自由予算枠:</span> <span className="font-bold">¥{calculatedBudget.toLocaleString()}</span></div>
+                <div className="flex justify-between"><span>未消化の予定枠:</span> <span className="font-bold">¥{reservedBudget.toLocaleString()}</span></div>
+              </div>
+            </div>
+
+            {/* 日常記帳フォーム（日付自由指定機能追加） */}
+            <div className="bg-white p-6 rounded-3xl shadow-sm border border-rose-100">
+              <h2 className="text-xs font-bold text-slate-400 mb-3 flex items-center gap-1">
+                <span>📝</span> 何もない日の支出（日常記帳）
+              </h2>
+              <form onSubmit={handleAddDaily} className="space-y-2.5">
+                <div>
+                  <label className="text-[10px] font-bold text-slate-400 mb-0.5 block">日付（その日以降・過去日も選択可能）</label>
+                  <input
+                    type="date"
+                    value={dailyDate}
+                    onChange={(e) => setDailyDate(e.target.value)}
+                    className="w-full p-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-700"
+                    required
+                  />
+                </div>
+
+                <div>
+                  <label className="text-[10px] font-bold text-slate-400 mb-0.5 block">品目（自動全角）</label>
+                  <input
+                    type="text"
+                    placeholder="品目・メモ（例：カフェ代）"
+                    value={dailyMemo}
+                    onChange={(e) => setDailyMemo(e.target.value)}
+                    onBlur={(e) => setDailyMemo(toFullWidth(e.target.value))}
+                    className="w-full p-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold focus:outline-none focus:ring-2 focus:ring-rose-300"
+                    required
+                  />
+                </div>
+
+                <div>
+                  <label className="text-[10px] font-bold text-slate-400 mb-0.5 block">金額（円）</label>
+                  <input
+                    type="number"
+                    inputMode="numeric"
+                    placeholder="金額（例：850）"
+                    value={dailyAmount}
+                    onChange={(e) => setDailyAmount(e.target.value)}
+                    className="w-full p-2 bg-slate-50 border border-slate-200 rounded-xl text-base font-black text-rose-500 focus:outline-none focus:ring-2 focus:ring-rose-300"
+                    required
+                  />
+                </div>
+
+                <button type="submit" className="w-full bg-slate-800 hover:bg-slate-700 text-white text-xs font-bold py-2 rounded-xl transition shadow-sm">
+                  支出を追加する
+                </button>
+              </form>
+            </div>
+          </div>
+
+          {/* 下部エリア */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            
+            {/* イベントエリア */}
+            <div className="bg-white p-6 rounded-3xl shadow-sm border border-rose-100 space-y-4">
+              <h2 className="font-bold text-slate-700 border-b border-rose-50 pb-3 flex items-center gap-2">
+                <span>🎉</span> イベント・遊ぶ予定と内訳予算
+              </h2>
+
+              <form onSubmit={handleAddEvent} className="bg-rose-50/50 p-4 rounded-2xl space-y-3 border border-rose-100">
+                <div className="grid grid-cols-2 gap-2">
+                  <input
+                    type="text"
+                    placeholder="メインイベント名"
+                    value={newEventTitle}
+                    onChange={(e) => setNewEventTitle(e.target.value)}
+                    onBlur={(e) => setNewEventTitle(toFullWidth(e.target.value))}
+                    className="p-2 text-xs bg-white border border-rose-200 rounded-xl font-bold col-span-2"
+                    required
+                  />
+                  <input
+                    type="date"
+                    value={newEventDate}
+                    onChange={(e) => setNewEventDate(e.target.value)}
+                    className="p-2 text-xs bg-white border border-rose-200 rounded-xl text-slate-500 col-span-2"
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <span className="text-[11px] text-slate-400 font-bold block">内訳サブ欄:</span>
+                  {subItemsInput.map((sub, idx) => (
+                    <div key={idx} className="flex gap-2">
+                      <input
+                        type="text"
+                        placeholder="項目"
+                        value={sub.name}
+                        onChange={(e) => {
+                          const updated = [...subItemsInput]; updated[idx].name = e.target.value; setSubItemsInput(updated);
+                        }}
+                        onBlur={(e) => {
+                          const updated = [...subItemsInput]; updated[idx].name = toFullWidth(e.target.value); setSubItemsInput(updated);
+                        }}
+                        className="w-1/2 p-1.5 text-xs bg-white border border-rose-200 rounded-lg"
+                      />
+                      <input
+                        type="number"
+                        placeholder="予算（円）"
+                        value={sub.budget}
+                        onChange={(e) => {
+                          const updated = [...subItemsInput]; updated[idx].budget = e.target.value; setSubItemsInput(updated);
+                        }}
+                        className="w-1/2 p-1.5 text-xs bg-white border border-rose-200 rounded-lg"
+                      />
+                    </div>
+                  ))}
+                  <button type="button" onClick={() => setSubItemsInput([...subItemsInput, { name: '', budget: '' }])} className="text-[10px] text-rose-500 hover:underline font-bold">
+                    ＋ 内訳欄を増やす
+                  </button>
+                </div>
+
+                <button type="submit" className="w-full bg-rose-400 hover:bg-rose-500 text-white text-xs font-bold py-2 rounded-xl transition">
+                  イベント予定を追加
+                </button>
+              </form>
+
+              <div className="space-y-4 max-h-96 overflow-y-auto pr-1">
+                {events.map((ev) => {
+                  const evTotalBudget = ev.subItems.reduce((s, item) => s + Number(item.budget || 0), 0);
+                  const evTotalActual = ev.subItems.reduce((s, item) => s + Number(item.actual || 0), 0);
+
+                  return (
+                    <div key={ev.id} className="bg-slate-50 p-4 rounded-2xl border border-slate-200 space-y-3">
+                      <div className="flex justify-between items-start gap-2">
+                        <div className="flex-1">
+                          <input
+                            type="text"
+                            value={ev.title}
+                            onChange={(e) => handleUpdateEventTitle(ev.id, e.target.value)}
+                            onBlur={(e) => handleUpdateEventTitle(ev.id, e.target.value)}
+                            className="font-bold text-sm text-slate-800 bg-transparent border-b border-transparent hover:border-slate-300 focus:border-rose-400 focus:bg-white px-1 rounded w-full"
+                          />
+                          <div className="mt-1 text-xs font-bold text-rose-600 flex items-center gap-2">
+                            <span>全体予算: ¥{evTotalBudget.toLocaleString()}</span>
+                            {evTotalActual > 0 && <span className="text-slate-500">（実績計: ¥{evTotalActual.toLocaleString()}）</span>}
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-2">
+                          <span className="text-[10px] bg-rose-100 text-rose-600 px-2 py-0.5 rounded-md font-bold shrink-0">{ev.date || '日付未定'}</span>
+                          <button onClick={() => handleDeleteEvent(ev.id)} className="text-slate-300 hover:text-red-500 text-xs px-1" title="イベント削除">✕</button>
+                        </div>
+                      </div>
+
+                      <div className="space-y-2 pl-2 border-l-2 border-rose-200">
+                        {ev.subItems.map((sub, sIdx) => (
+                          <div key={sIdx} className="flex justify-between items-center text-xs gap-1.5">
+                            <input
+                              type="text"
+                              value={sub.name}
+                              onChange={(e) => handleUpdateSubItem(ev.id, sIdx, 'name', e.target.value)}
+                              onBlur={(e) => handleUpdateSubItem(ev.id, sIdx, 'name', e.target.value)}
+                              className="w-1/3 bg-white border border-slate-200 rounded px-1.5 py-0.5 font-medium"
+                            />
+                            <div className="flex items-center gap-1">
+                              <span className="text-[10px] text-slate-400">予定:</span>
+                              <input
+                                type="number"
+                                value={sub.budget}
+                                onChange={(e) => handleUpdateSubItem(ev.id, sIdx, 'budget', e.target.value)}
+                                className="w-16 bg-white border border-slate-200 rounded px-1 py-0.5 text-right font-bold"
+                              />
+                            </div>
+                            <div className="flex items-center gap-1">
+                              <span className="text-[10px] text-slate-400">実績:</span>
+                              <input
+                                type="number"
+                                value={sub.actual || ''}
+                                placeholder="0"
+                                onChange={(e) => handleUpdateSubItem(ev.id, sIdx, 'actual', e.target.value)}
+                                className="w-16 bg-white border border-rose-300 rounded px-1 py-0.5 text-right font-bold text-rose-600"
+                              />
+                            </div>
+                            <button 
+                              onClick={() => handleDeleteSubItemFromEvent(ev.id, sIdx)} 
+                              className="text-slate-300 hover:text-red-500 text-xs px-1"
+                            >
+                              ✕
+                            </button>
+                          </div>
+                        ))}
+
+                        <div className="pt-1">
+                          <button
+                            onClick={() => handleAddSubItemToEvent(ev.id)}
+                            className="text-[11px] font-bold text-rose-500 hover:text-rose-600 flex items-center gap-1"
+                          >
+                            <span>＋ 内訳サブ項目を追加する</span>
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* 買い物予定 ＆ 日常ログ（縦幅2.5倍拡張 ＆ カレンダータブ追加） */}
+            <div className="space-y-6">
+              
+              {/* 買い物予定 */}
+              <div className="bg-white p-6 rounded-3xl shadow-sm border border-rose-100 space-y-4">
+                <h2 className="font-bold text-slate-700 border-b border-rose-50 pb-3 flex items-center gap-2">
+                  <span>🛍️</span> 買い物・支出の予定
+                </h2>
+
+                <form onSubmit={handleAddPurchase} className="flex gap-2">
+                  <input
+                    type="text"
+                    placeholder="欲しい物・支出予定"
+                    value={newPurchaseTitle}
+                    onChange={(e) => setNewPurchaseTitle(e.target.value)}
+                    onBlur={(e) => setNewPurchaseTitle(toFullWidth(e.target.value))}
+                    className="w-1/2 p-2 text-xs bg-slate-50 border border-slate-200 rounded-xl"
+                  />
+                  <input
+                    type="number"
+                    placeholder="予定額"
+                    value={newPurchaseBudget}
+                    onChange={(e) => setNewPurchaseBudget(e.target.value)}
+                    className="w-1/4 p-2 text-xs bg-slate-50 border border-slate-200 rounded-xl"
+                  />
+                  <button type="submit" className="w-1/4 bg-slate-800 text-white text-xs font-bold rounded-xl">追加</button>
+                </form>
+
+                <div className="space-y-2 max-h-48 overflow-y-auto">
+                  {plannedPurchases.map((p) => (
+                    <div key={p.id} className="flex justify-between items-center p-2 bg-slate-50 rounded-xl text-xs gap-2">
+                      <div className="flex items-center gap-2 flex-1">
+                        <input
+                          type="checkbox"
+                          checked={p.isDone}
+                          onChange={(e) => handleUpdatePurchase(p.id, 'isDone', e.target.checked)}
+                          className="rounded text-rose-500 focus:ring-rose-400 cursor-pointer"
+                        />
+                        <input
+                          type="text"
+                          value={p.title}
+                          onChange={(e) => handleUpdatePurchase(p.id, 'title', e.target.value)}
+                          onBlur={(e) => handleUpdatePurchase(p.id, 'title', e.target.value)}
+                          className={`bg-transparent border-b border-transparent focus:bg-white px-1 rounded font-bold w-full ${p.isDone ? 'line-through text-slate-400' : ''}`}
+                        />
+                      </div>
+                      
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-[10px] text-slate-400">予定:</span>
+                        <input
+                          type="number"
+                          value={p.budget}
+                          onChange={(e) => handleUpdatePurchase(p.id, 'budget', e.target.value)}
+                          className="w-16 bg-white border border-slate-200 rounded px-1 py-0.5 text-right font-bold"
+                        />
+                        {p.isDone && (
+                          <>
+                            <span className="text-[10px] text-rose-400 font-bold">実績:</span>
+                            <input
+                              type="number"
+                              value={p.actual || ''}
+                              placeholder="0"
+                              onChange={(e) => handleUpdatePurchase(p.id, 'actual', e.target.value)}
+                              className="w-16 bg-white border border-rose-300 rounded px-1 py-0.5 text-right font-bold text-rose-600"
+                            />
+                          </>
+                        )}
+                        <button onClick={() => handleDeletePurchase(p.id)} className="text-slate-300 hover:text-red-500 ml-1">✕</button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* 【拡張＆タブ化】日常ログ ＆ カレンダー機能 */}
+              <div className="bg-white p-6 rounded-3xl shadow-sm border border-rose-100">
+                <div className="flex justify-between items-center border-b border-rose-50 pb-3 mb-4">
+                  <h2 className="font-bold text-slate-700 text-xs flex items-center gap-1">
+                    <span>☕️</span> 日常支出ログ
+                  </h2>
+
+                  {/* 表示切替タブ */}
+                  <div className="flex bg-rose-50 p-1 rounded-xl border border-rose-100 text-[11px] font-bold">
+                    <button
+                      onClick={() => setViewMode('list')}
+                      className={`px-3 py-1 rounded-lg transition ${
+                        viewMode === 'list' ? 'bg-white text-rose-500 shadow-sm' : 'text-slate-400 hover:text-slate-600'
+                      }`}
+                    >
+                      📝 リスト表示
+                    </button>
+                    <button
+                      onClick={() => setViewMode('calendar')}
+                      className={`px-3 py-1 rounded-lg transition ${
+                        viewMode === 'calendar' ? 'bg-white text-rose-500 shadow-sm' : 'text-slate-400 hover:text-slate-600'
+                      }`}
+                    >
+                      📅 カレンダー
+                    </button>
+                  </div>
+                </div>
+
+                {/* ① リスト表示（縦幅2.5倍＝max-h-[38rem]へ拡張） */}
+                {viewMode === 'list' ? (
+                  <div className="space-y-4 max-h-[38rem] overflow-y-auto pr-1">
+                    {Object.keys(groupedDailyRecords).length === 0 ? (
+                      <p className="text-xs text-slate-400 text-center py-8">この月の日常記録はありません</p>
+                    ) : (
+                      Object.keys(groupedDailyRecords).map((date) => {
+                        const dayRecords = groupedDailyRecords[date];
+                        const dayTotal = dayRecords.reduce((sum, item) => sum + Number(item.amount || 0), 0);
+
+                        return (
+                          <div key={date} className="bg-slate-50 p-3 rounded-2xl border border-slate-200 space-y-2">
+                            <div className="flex justify-between items-center border-b border-slate-200 pb-1.5">
+                              <span className="text-xs font-bold text-slate-600 flex items-center gap-1">
+                                <span>📅</span> {date}
+                              </span>
+                              <span className="text-xs font-black text-rose-500 bg-rose-50 px-2 py-0.5 rounded-lg border border-rose-100">
+                                日計: ¥{dayTotal.toLocaleString()}
+                              </span>
+                            </div>
+
+                            <div className="space-y-1.5">
+                              {dayRecords.map((item) => (
+                                <div key={item.id} className="flex justify-between items-center text-xs gap-2 pl-1">
+                                  <input
+                                    type="text"
+                                    value={item.memo}
+                                    onChange={(e) => handleUpdateDaily(item.id, 'memo', e.target.value)}
+                                    onBlur={(e) => handleUpdateDaily(item.id, 'memo', e.target.value)}
+                                    className="bg-white border border-slate-200 rounded px-2 py-1 font-bold text-slate-700 flex-1"
+                                  />
+                                  <div className="flex items-center gap-1">
+                                    <input
+                                      type="number"
+                                      value={item.amount}
+                                      onChange={(e) => handleUpdateDaily(item.id, 'amount', e.target.value)}
+                                      className="w-20 bg-white border border-slate-200 rounded px-1.5 py-1 font-bold text-right text-rose-500"
+                                    />
+                                    <span className="text-xs text-slate-400">円</span>
+                                    <button onClick={() => handleDeleteDaily(item.id)} className="text-slate-300 hover:text-red-500 ml-1">✕</button>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        );
+                      })
+                    )}
+                  </div>
+                ) : (
+                  /* ② カレンダー表示 */
+                  <div className="space-y-3">
+                    <div className="grid grid-cols-7 gap-1 text-center text-[10px] font-bold text-slate-400 py-1">
+                      <span className="text-rose-400">日</span>
+                      <span>月</span><span>火</span><span>水</span><span>木</span><span>金</span>
+                      <span className="text-blue-400">土</span>
+                    </div>
+
+                    <div className="grid grid-cols-7 gap-1.5">
+                      {/* 開始日の前の空白 */}
+                      {Array.from({ length: startDayOfWeek }).map((_, idx) => (
+                        <div key={`empty-${idx}`} className="h-14 bg-slate-50/50 rounded-xl"></div>
+                      ))}
+
+                      {/* 日付マス目 */}
+                      {Array.from({ length: daysInMonth }).map((_, idx) => {
+                        const dayNum = idx + 1;
+                        const totalSpent = calendarDailyTotals[dayNum] || 0;
+                        const dateString = `${yearNum}/${String(monthNum).padStart(2, '0')}/${String(dayNum).padStart(2, '0')}`;
+
+                        return (
+                          <div
+                            key={dayNum}
+                            onClick={() => setSelectedCalendarDate(dateString)}
+                            className={`h-14 p-1.5 rounded-xl border flex flex-col justify-between cursor-pointer transition active:scale-95 ${
+                              totalSpent > 0 
+                                ? 'bg-rose-50/60 border-rose-200 hover:border-rose-400' 
+                                : 'bg-slate-50 border-slate-100 hover:border-slate-300'
+                            }`}
+                          >
+                            <span className="text-[10px] font-bold text-slate-500">{dayNum}</span>
+                            {totalSpent > 0 && (
+                              <span className="text-[10px] font-black text-rose-500 truncate leading-none">
+                                ¥{totalSpent.toLocaleString()}
+                              </span>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+
+                    {/* カレンダータップ時の内訳ポップアップ表示 */}
+                    {selectedCalendarDate && (
+                      <div className="mt-4 p-4 bg-rose-50/80 rounded-2xl border border-rose-200 space-y-2 animate-fadeIn">
+                        <div className="flex justify-between items-center">
+                          <span className="text-xs font-bold text-slate-700">📅 {selectedCalendarDate} の支出内訳</span>
+                          <button onClick={() => setSelectedCalendarDate(null)} className="text-xs text-slate-400 hover:text-slate-600 font-bold">✕ 閉じる</button>
+                        </div>
+
+                        {groupedDailyRecords[selectedCalendarDate] ? (
+                          <div className="space-y-1 max-h-36 overflow-y-auto pr-1">
+                            {groupedDailyRecords[selectedCalendarDate].map((item) => (
+                              <div key={item.id} className="flex justify-between text-xs bg-white p-2 rounded-lg border border-rose-100">
+                                <span className="font-bold text-slate-700">{item.memo}</span>
+                                <span className="font-bold text-rose-500">¥{Number(item.amount).toLocaleString()}</span>
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <p className="text-xs text-slate-400 text-center py-2">この日の日常支出記録はありません</p>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+
+            </div>
+
+          </div>
+
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<SmartKakeibo />);
+  </script>
+</body>
+</html>
